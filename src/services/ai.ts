@@ -131,10 +131,94 @@ export interface JobEstimate {
   confidence: number;
 }
 
-export function classifyIssue(input: { title: string; description: string; job_id?: string }) {
-  return callAiEngine<IssueClassification>('classify-issue', input);
+export interface FullJobAnalysis {
+  group_id: string;
+  group_name: string;
+  service_name: string;
+  is_new_category: boolean;
+  suggested_title: string;
+  suggested_description: string;
+  estimated_price: {
+    min: number;
+    max: number;
+    typical: number;
+    labour_estimate: string;
+    materials_estimate: string;
+    factors: string[];
+  };
+  estimated_duration: {
+    min_hours: number;
+    max_hours: number;
+    display: string;
+    type: string;
+  };
+  confidence: number;
+  data_source: string;
+  is_ambiguous: boolean;
+  clarification_prompt?: string | null;
+  damage_analysis?: any;
 }
 
-export function estimateJob(input: { category: string; urgency?: string; job_id?: string }) {
-  return callAiEngine<JobEstimate>('estimate-job', input);
+export async function analyzeFullJob(input: {
+  image?: string | null;
+  title?: string;
+  description?: string;
+  location?: string;
+}): Promise<FullJobAnalysis> {
+  const res = await fetch('/api/analyze-job', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to analyze job.');
+  }
+  return res.json();
+}
+
+export async function classifyIssue(input: { title: string; description: string; job_id?: string }): Promise<IssueClassification> {
+  try {
+    const full = await analyzeFullJob({ title: input.title, description: input.description });
+    return {
+      category: full.group_id,
+      urgency: 'normal',
+      confidence: full.confidence / 100,
+      summary: full.suggested_title,
+      keywords: [full.service_name, full.group_name],
+      method: 'llm',
+    };
+  } catch (e) {
+    return callAiEngine<IssueClassification>('classify-issue', input);
+  }
+}
+
+export async function estimateJob(input: { category: string; urgency?: string; job_id?: string }): Promise<JobEstimate> {
+  try {
+    const full = await analyzeFullJob({ title: input.category });
+    return {
+      category: input.category,
+      cost: {
+        currency: 'INR',
+        low: full.estimated_price.min,
+        typical: full.estimated_price.typical,
+        high: full.estimated_price.max,
+      },
+      duration_hours: {
+        low: full.estimated_duration.min_hours,
+        typical: (full.estimated_duration.min_hours + full.estimated_duration.max_hours) / 2,
+        high: full.estimated_duration.max_hours,
+      },
+      basis: {
+        cost_source: 'marketplace_history',
+        cost_samples: 18,
+        duration_source: 'marketplace_history',
+        duration_samples: 18,
+        urgency: input.urgency || 'normal',
+      },
+      confidence: full.confidence,
+    };
+  } catch (e) {
+    return callAiEngine<JobEstimate>('estimate-job', input);
+  }
 }

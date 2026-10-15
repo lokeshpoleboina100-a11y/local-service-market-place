@@ -15,6 +15,7 @@ import Payment from "./pages/customer/Payment";
 import Chat from "./pages/customer/Chat";
 import CustomerChats from "./pages/customer/CustomerChats";
 import CustomerProfile from "./pages/customer/CustomerProfile";
+import JobTrackingPage from "./pages/JobTrackingPage";
 import WorkerHome from "./pages/worker/WorkerHome";
 import WorkerJobDetails from "./pages/worker/WorkerJobDetails";
 import WorkerMyJobs from "./pages/worker/WorkerMyJobs";
@@ -28,7 +29,9 @@ import EditProfile from "./pages/EditProfile";
 import AIHelpDesk from "./pages/AIHelpDesk";
 import Stories from "./pages/Stories";
 import Categories from "./pages/Categories";
+import DamageInspection from "./pages/DamageInspection";
 import NotFound from "./pages/NotFound";
+import FloatingAIAssistant from "@/components/FloatingAIAssistant";
 
 const queryClient = new QueryClient();
 
@@ -50,6 +53,7 @@ const AppRoutes = () => (
     <Route path="/customer" element={<ProtectedRoute><CustomerHome /></ProtectedRoute>} />
     <Route path="/customer/post-job" element={<ProtectedRoute><PostJob /></ProtectedRoute>} />
     <Route path="/customer/job/:id" element={<ProtectedRoute><JobDetails /></ProtectedRoute>} />
+    <Route path="/job-tracking/:id" element={<ProtectedRoute><JobTrackingPage /></ProtectedRoute>} />
     <Route path="/customer/payment/:id" element={<ProtectedRoute><Payment /></ProtectedRoute>} />
     <Route path="/customer/chats" element={<ProtectedRoute><CustomerChats /></ProtectedRoute>} />
     <Route path="/customer/chat/:id" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
@@ -66,6 +70,7 @@ const AppRoutes = () => (
     <Route path="/worker/saved-jobs" element={<ProtectedRoute><WorkerSavedJobs /></ProtectedRoute>} />
     
     {/* Shared Routes */}
+    <Route path="/damage-inspection" element={<DamageInspection />} />
     <Route path="/edit-profile" element={<ProtectedRoute><EditProfile /></ProtectedRoute>} />
     <Route path="/ai-help" element={<ProtectedRoute><AIHelpDesk /></ProtectedRoute>} />
     <Route path="/stories" element={<ProtectedRoute><Stories /></ProtectedRoute>} />
@@ -87,6 +92,7 @@ const App = () => (
           <AuthProvider>
             <NotificationProvider>
               <AppRoutes />
+              <FloatingAIAssistant />
             </NotificationProvider>
           </AuthProvider>
         </BrowserRouter>

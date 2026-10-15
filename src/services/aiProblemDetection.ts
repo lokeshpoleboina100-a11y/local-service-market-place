@@ -47,6 +47,15 @@ export interface VisionAnalysis {
   /** False when the photo is too unclear for a reliable classification. */
   clear_enough: boolean;
   region: ProblemRegion;
+  productCategory?: string;
+  damageType?: string;
+  severity?: 'Low' | 'Medium' | 'High';
+  damageLocation?: string;
+  recommendedAction?: string;
+  visualizationImage?: string;
+  heatmapImage?: string;
+  originalImage?: string;
+  inspectionId?: string;
 }
 
 export interface ReferenceView {
@@ -86,8 +95,39 @@ async function callDetection<T>(body: Record<string, unknown>): Promise<T> {
   return data as T;
 }
 
-/** Computer-vision classification of the visible problem in a photo. */
-export function analyzeProblemPhoto(input: { image: string; hint?: string }) {
+/** Computer-vision classification of the visible problem in a photo using CNN backend. */
+export async function analyzeProblemPhoto(input: { image: string; hint?: string }): Promise<VisionAnalysis> {
+  try {
+    const res = await fetch('/api/analyze-json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: input.image, notes: input.hint }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        model: data.verified_by_model || 'MobileNetV3 CNN + Fracture Tensor',
+        problem: `${data.product_category}: ${data.damage_type}`,
+        category: 'Appliance',
+        confidence: Math.round(data.confidence),
+        explanation: `${data.damage_location}. Severity: ${data.severity}. ${data.recommended_action}`,
+        clear_enough: true,
+        region: data.bbox || { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+        productCategory: data.product_category,
+        damageType: data.damage_type,
+        severity: data.severity,
+        damageLocation: data.damage_location,
+        recommendedAction: data.recommended_action,
+        visualizationImage: data.visualization_image,
+        heatmapImage: data.heatmap_image,
+        originalImage: data.original_image,
+        inspectionId: data.id,
+      };
+    }
+  } catch (err) {
+    console.warn('FastAPI backend /api/analyze-json failed, trying edge fallback', err);
+  }
+
   return callDetection<VisionAnalysis>({
     action: 'analyze',
     image: input.image,
@@ -95,13 +135,40 @@ export function analyzeProblemPhoto(input: { image: string; hint?: string }) {
   });
 }
 
-/** Generative AI reference illustrations for a problem that can't be photographed. */
-export function generateReferenceViews(input: {
+/** Generative AI realistic visualization of damage. */
+export async function generateReferenceViews(input: {
   image: string;
   problem: string;
   category: string;
   views?: number;
-}) {
+}): Promise<{ model: string; images: ReferenceView[] }> {
+  try {
+    const res = await fetch('/api/generate-damage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image: input.image,
+        damage_type: input.problem,
+        severity: 'High',
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        model: 'PyTorch Damage Synthesis Engine',
+        images: [
+          {
+            label: 'AI Damage Visualization',
+            image: data.generated_image,
+            disclaimer: 'AI-generated realistic damaged representation',
+          },
+        ],
+      };
+    }
+  } catch (err) {
+    console.warn('Backend /api/generate-damage failed, falling back', err);
+  }
+
   return callDetection<{ model: string; images: ReferenceView[] }>({
     action: 'reference-views',
     image: input.image,

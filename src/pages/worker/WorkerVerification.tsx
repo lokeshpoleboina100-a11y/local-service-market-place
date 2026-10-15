@@ -1,331 +1,417 @@
-import { useState, useEffect, useRef } from 'react';
-import { Upload, FileCheck, Clock, XCircle, Shield, Loader2, ScanSearch, AlertTriangle } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import {
+  Shield,
+  FileCheck,
+  Clock,
+  XCircle,
+  AlertTriangle,
+  Loader2,
+  CheckCircle2,
+  Lock,
+  RefreshCw,
+  ExternalLink,
+  Info,
+  Check,
+  UserCheck,
+} from 'lucide-react';
 import AppHeader from '@/components/AppHeader';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 
-interface VerificationDoc {
+export type VerificationStatus =
+  | 'not_verified'
+  | 'pending'
+  | 'verified'
+  | 'failed'
+  | 'requires_review';
+
+interface VerificationRecord {
   id: string;
   document_type: string;
-  status: string;
-  admin_notes: string | null;
+  document_number_masked: string;
+  status: VerificationStatus;
+  risk_level: string;
+  failure_reason?: string | null;
+  provider_status: string;
+  admin_notes?: string | null;
   created_at: string;
-  fraud_status: string | null;
-  risk_level: string | null;
+  updated_at: string;
 }
 
 const DOC_TYPES = [
-  { value: 'aadhaar', label: 'Aadhaar Card' },
-  { value: 'pan', label: 'PAN Card' },
-  { value: 'driving_licence', label: 'Driving Licence' },
-  { value: 'address_proof', label: 'Address Proof' },
-  { value: 'skill_certificate', label: 'Skill Certificate' },
-  { value: 'police_clearance', label: 'Police Clearance' },
+  { value: 'aadhaar', label: 'Aadhaar Card (12 Digits)', hint: 'e.g. 1234 5678 9010 (Verhoeff checksum verified)' },
+  { value: 'pan', label: 'PAN Card (Permanent Account Number)', hint: 'e.g. ABCDE1234F (10 uppercase characters)' },
+  { value: 'driving_licence', label: 'Driving Licence', hint: 'e.g. DL-1420110012345' },
+  { value: 'skill_certificate', label: 'Trade / Skill Certification', hint: 'Government or vocational training certificate' },
+  { value: 'police_clearance', label: 'Police Clearance Certificate', hint: 'Local police verification certificate' },
 ];
 
-const STATUS_CONFIG: Record<string, { icon: React.ElementType; color: string; label: string }> = {
-  pending: { icon: Clock, color: 'text-warning', label: 'Pending Review' },
-  approved: { icon: FileCheck, color: 'text-green-600', label: 'Approved' },
-  rejected: { icon: XCircle, color: 'text-destructive', label: 'Rejected' },
-  reupload_requested: { icon: AlertTriangle, color: 'text-warning', label: 'Re-upload Requested' },
-};
-
-/** Worker-safe wording for the AI screening outcome — never exposes internal signals. */
-const AI_CHECK_CONFIG: Record<string, { label: string; className: string }> = {
-  passed: {
-    label: 'AI check passed',
-    className: 'border-green-600/30 bg-green-600/10 text-green-700 dark:text-green-400',
+const STATUS_DETAILS: Record<
+  VerificationStatus,
+  { label: string; icon: React.ElementType; color: string; badgeClass: string; desc: string }
+> = {
+  not_verified: {
+    label: 'Not Verified',
+    icon: AlertTriangle,
+    color: 'text-muted-foreground',
+    badgeClass: 'bg-muted text-muted-foreground border-border',
+    desc: 'You have not submitted official identity credentials yet.',
   },
-  review: { label: 'Manual review needed', className: 'border-warning/30 bg-warning/10 text-warning' },
-  duplicate_document: {
-    label: 'Manual review needed',
-    className: 'border-warning/30 bg-warning/10 text-warning',
+  pending: {
+    label: 'Verification Pending',
+    icon: Clock,
+    color: 'text-amber-500',
+    badgeClass: 'bg-amber-500/10 text-amber-600 border-amber-500/30',
+    desc: 'Your credentials have been submitted and are undergoing compliance checks.',
   },
-  failed: { label: 'AI check failed', className: 'border-destructive/30 bg-destructive/10 text-destructive' },
-  error: { label: 'Check incomplete', className: 'border-warning/30 bg-warning/10 text-warning' },
-  pending: { label: 'AI check queued', className: 'text-muted-foreground' },
+  verified: {
+    label: 'Verified',
+    icon: CheckCircle2,
+    color: 'text-green-600',
+    badgeClass: 'bg-green-600/10 text-green-600 border-green-600/30',
+    desc: 'Your identity is officially confirmed. Verified Pro badge is active on your profile.',
+  },
+  failed: {
+    label: 'Verification Failed',
+    icon: XCircle,
+    color: 'text-destructive',
+    badgeClass: 'bg-destructive/10 text-destructive border-destructive/30',
+    desc: 'The submitted document failed format or checksum validation.',
+  },
+  requires_review: {
+    label: 'Verification Requires Review',
+    icon: AlertTriangle,
+    color: 'text-amber-500',
+    badgeClass: 'bg-amber-500/10 text-amber-600 border-amber-500/30',
+    desc: 'Document requires administrative manual review. Our compliance team is inspecting it.',
+  },
 };
-
-const RISK_CONFIG: Record<string, string> = {
-  low: 'border-green-600/30 bg-green-600/10 text-green-700 dark:text-green-400',
-  medium: 'border-warning/30 bg-warning/10 text-warning',
-  high: 'border-destructive/30 bg-destructive/10 text-destructive',
-};
-
-const SELECT_COLS = 'id, document_type, status, admin_notes, created_at, fraud_status, risk_level';
 
 export default function WorkerVerification() {
   const { user, profile } = useAuth();
-  const [docs, setDocs] = useState<VerificationDoc[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [screenResult, setScreenResult] = useState<{ status: string; message: string } | null>(null);
-  const [fileName, setFileName] = useState<string | null>(null);
   const [docType, setDocType] = useState('aadhaar');
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [docNumber, setDocNumber] = useState('');
+  const [holderName, setHolderName] = useState(profile?.full_name || '');
+  const [submitting, setSubmitting] = useState(false);
+  const [records, setRecords] = useState<VerificationRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [overallStatus, setOverallStatus] = useState<VerificationStatus>('not_verified');
+  const [showForm, setShowForm] = useState(true);
+
+  const fetchStatus = async () => {
+    if (!user) return;
+    try {
+      const res = await fetch(`/api/verification/status/${user.id}`);
+      if (res.ok) {
+        const json = await res.json();
+        const data = json.data;
+        setRecords(data.documents || []);
+        setOverallStatus(data.status || 'not_verified');
+
+        // Sync verified badge to Supabase profile if backend confirmed verification
+        if (data.is_verified && !profile?.is_verified) {
+          await supabase
+            .from('profiles')
+            .update({ is_verified: true })
+            .eq('user_id', user.id);
+        }
+      }
+    } catch {
+      // Quiet fail
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    if (!user) return;
-    const fetchDocs = async () => {
-      const { data } = await supabase
-        .from('verification_documents')
-        .select(SELECT_COLS)
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
-      setDocs((data as VerificationDoc[]) || []);
-      setLoading(false);
-    };
-    fetchDocs();
+    fetchStatus();
   }, [user]);
 
-  const refreshDocs = async () => {
-    if (!user) return;
-    const { data } = await supabase
-      .from('verification_documents')
-      .select(SELECT_COLS)
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false });
-    setDocs((data as VerificationDoc[]) || []);
-  };
-
-  const openPicker = () => {
-    if (uploading || analyzing) return;
-    const input = fileRef.current;
-    if (!input) return;
-    // Reset so re-selecting the same file still fires onChange
-    input.value = '';
-    input.click();
-  };
-
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     if (!user) {
-      toast.error('Please sign in to upload documents');
+      toast.error('Please sign in to submit verification credentials.');
       return;
     }
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error('File must be under 10MB');
-      if (fileRef.current) fileRef.current.value = '';
+    if (!docNumber.trim()) {
+      toast.error('Please enter your document credential number.');
       return;
     }
 
-    setFileName(file.name);
-    setScreenResult(null);
-    setUploading(true);
-
+    setSubmitting(true);
     try {
-      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
-      const path = `${user.id}/${Date.now()}.${ext}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from('verification-docs')
-        .upload(path, file, { contentType: file.type || undefined, upsert: false });
-      if (uploadError) {
-        toast.error(uploadError.message || 'Upload failed');
-        return;
-      }
-
-      const { data: doc, error } = await supabase
-        .from('verification_documents')
-        .insert({
+      const res = await fetch('/api/verification/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           user_id: user.id,
+          user_name: holderName.trim() || user.email?.split('@')[0] || 'Worker',
+          role: 'worker',
           document_type: docType,
-          document_url: path,
-          storage_path: path,
-        })
-        .select(SELECT_COLS)
-        .single();
-
-      if (error || !doc) {
-        toast.error(error?.message || 'Failed to save document');
-        return;
-      }
-
-      setDocs((prev) => [doc as VerificationDoc, ...prev]);
-      toast.success('Document uploaded — running AI security check');
-
-      setUploading(false);
-      setAnalyzing(true);
-      const { data: result, error: fnError } = await supabase.functions.invoke('verification-analyze', {
-        body: { documentId: (doc as VerificationDoc).id },
+          document_number: docNumber.trim(),
+        }),
       });
 
-      setScreenResult(
-        fnError
-          ? {
-              status: 'review',
-              message: 'We could not complete the automatic check. Our team will review your document manually.',
-            }
-          : {
-              status: (result as any)?.status ?? 'review',
-              message: (result as any)?.message ?? 'Your document is under review.',
-            }
-      );
-      await refreshDocs();
+      const json = await res.json();
+
+      if (!res.ok) {
+        throw new Error(json.detail || 'Verification validation failed.');
+      }
+
+      const val = json.validation_details;
+      if (val.status === 'verified') {
+        toast.success('Identity Verified Successfully! Verified Badge granted.');
+        // Update profile in supabase
+        await supabase
+          .from('profiles')
+          .update({ is_verified: true })
+          .eq('user_id', user.id);
+      } else if (val.status === 'requires_review') {
+        toast.info('Document submitted for administrative compliance review.');
+      } else if (val.status === 'failed') {
+        toast.error(`Verification Failed: ${val.reason || 'Invalid credential details.'}`);
+      }
+
+      setDocNumber('');
+      await fetchStatus();
     } catch (err: any) {
-      toast.error(err?.message || 'Something went wrong while uploading');
+      toast.error(err.message || 'Verification submission error.');
     } finally {
-      setUploading(false);
-      setAnalyzing(false);
-      setFileName(null);
-      if (fileRef.current) fileRef.current.value = '';
+      setSubmitting(false);
     }
   };
 
-
-  const approvedCount = docs.filter((d) => d.status === 'approved').length;
-  const totalRequired = 2;
+  const statusCfg = STATUS_DETAILS[overallStatus] || STATUS_DETAILS.not_verified;
+  const StatusIcon = statusCfg.icon;
 
   return (
     <div className="min-h-screen bg-background pb-20">
-      <AppHeader title="Verification" showBack />
+      <AppHeader title="Identity & Skill Verification" showBack />
 
-      <div className="max-w-lg mx-auto px-4 py-6 space-y-6">
-        {/* Status overview */}
-        <Card className="p-5">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
-              <Shield className="h-6 w-6 text-primary" />
+      <div className="max-w-lg mx-auto px-4 py-5 space-y-5">
+        {/* Verification Overview Banner */}
+        <Card className="p-5 border-primary/20 bg-gradient-to-br from-card to-primary/5 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className={`h-12 w-12 rounded-full flex items-center justify-center bg-primary/10 ${statusCfg.color}`}>
+                <StatusIcon className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="font-extrabold text-base text-foreground flex items-center gap-2">
+                  {statusCfg.label}
+                  {overallStatus === 'verified' && (
+                    <Badge className="bg-emerald-600 text-white font-bold text-[10px]">
+                      PRO BADGE ACTIVE
+                    </Badge>
+                  )}
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+                  {statusCfg.desc}
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-bold text-lg">Verification Status</h3>
-              <p className="text-sm text-muted-foreground">
-                {profile?.is_verified
-                  ? 'Your profile is verified'
-                  : `${Math.min(approvedCount, totalRequired)}/${totalRequired} documents approved`}
+            <Badge variant="outline" className={statusCfg.badgeClass}>
+              {statusCfg.label}
+            </Badge>
+          </div>
+
+          {/* Privacy & Compliance Assurance */}
+          <div className="pt-2 border-t border-border/40 text-[11px] text-muted-foreground space-y-1">
+            <p className="flex items-center gap-1 font-semibold text-foreground">
+              <Lock className="h-3 w-3 text-primary" />
+              Privacy & Fraud Prevention Standards:
+            </p>
+            <p>
+              • Sensitive document numbers are securely masked (e.g. <code>XXXX-XXXX-1234</code>) and never exposed publicly.
+            </p>
+            <p>
+              • Phone or email verification alone does not grant a verified badge. Official government identity credentials are required.
+            </p>
+            <p className="text-[10px] text-muted-foreground/70 italic">
+              • Compliance Provider: NearWork Verification Pipeline (Live UIDAI / NSDL gateway key pending in environment).
+            </p>
+          </div>
+        </Card>
+
+        {/* Verification Form */}
+        <Card className="p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <h4 className="font-bold text-sm text-foreground flex items-center gap-1.5">
+                <Shield className="h-4 w-4 text-primary" />
+                Submit Verification Credentials
+              </h4>
+              <p className="text-xs text-muted-foreground">
+                Enter your genuine identity or trade credential for compliance verification.
               </p>
             </div>
           </div>
-          <div className="w-full bg-secondary rounded-full h-2">
-            <div
-              className="bg-primary h-2 rounded-full transition-all"
-              style={{ width: `${Math.min(100, (approvedCount / totalRequired) * 100)}%` }}
-            />
-          </div>
-        </Card>
 
-        {/* Upload new document */}
-        <Card className="p-5 space-y-4">
-          <h4 className="font-bold">Upload Document</h4>
-          <p className="text-xs text-muted-foreground flex items-start gap-2">
-            <ScanSearch className="h-4 w-4 shrink-0 mt-0.5 text-primary" />
-            Every upload is screened by AI for tampering, readability and duplicates before an admin reviews it.
-          </p>
-          <Select value={docType} onValueChange={setDocType}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {DOC_TYPES.map((dt) => (
-                <SelectItem key={dt.value} value={dt.value}>{dt.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <form onSubmit={handleSubmit} className="space-y-4 pt-1">
+            {/* Document Type Selector */}
+            <div className="space-y-1.5">
+              <Label className="font-bold text-xs">Document Type</Label>
+              <Select value={docType} onValueChange={setDocType}>
+                <SelectTrigger className="h-11 rounded-xl">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {DOC_TYPES.map((d) => (
+                    <SelectItem key={d.value} value={d.value} className="text-xs">
+                      {d.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                {DOC_TYPES.find((d) => d.value === docType)?.hint}
+              </p>
+            </div>
 
-          <input
-            type="file"
-            ref={fileRef}
-            className="sr-only"
-            tabIndex={-1}
-            accept="image/*,application/pdf"
-            onChange={handleUpload}
-          />
-          <Button
-            type="button"
-            className="w-full gap-2"
-            onClick={openPicker}
-            disabled={uploading || analyzing}
-          >
-            {uploading || analyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-            {uploading ? 'Uploading...' : analyzing ? 'Checking your document securely…' : 'Choose File & Upload'}
-          </Button>
+            {/* Document Number */}
+            <div className="space-y-1.5">
+              <Label className="font-bold text-xs">Document ID / Number</Label>
+              <Input
+                placeholder={
+                  docType === 'aadhaar'
+                    ? '12-digit Aadhaar (e.g. 123456789010)'
+                    : docType === 'pan'
+                    ? '10-character PAN (e.g. ABCDE1234F)'
+                    : 'Enter credential number'
+                }
+                value={docNumber}
+                onChange={(e) => setDocNumber(e.target.value.toUpperCase())}
+                className="h-11 rounded-xl uppercase font-mono text-xs tracking-wider"
+                required
+              />
+              <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+                <Info className="h-3 w-3" />
+                Input is verified using standard checksums and duplicate prevention algorithms.
+              </p>
+            </div>
 
-          {fileName && (uploading || analyzing) && (
-            <p className="text-xs text-muted-foreground truncate">
-              {uploading ? 'Uploading' : 'Checking your document securely…'} {fileName}
-            </p>
-          )}
+            {/* Full Name as per document */}
+            <div className="space-y-1.5">
+              <Label className="font-bold text-xs">Full Name as per Document</Label>
+              <Input
+                placeholder="Full name matching your ID card"
+                value={holderName}
+                onChange={(e) => setHolderName(e.target.value)}
+                className="h-11 rounded-xl text-xs"
+                required
+              />
+            </div>
 
-
-          {screenResult && (
-            <div
-              className={`rounded-lg border p-3 text-sm flex items-start gap-2 ${
-                screenResult.status === 'passed'
-                  ? 'border-green-600/30 bg-green-600/10 text-green-700 dark:text-green-400'
-                  : screenResult.status === 'failed'
-                    ? 'border-destructive/30 bg-destructive/10 text-destructive'
-                    : 'border-warning/30 bg-warning/10 text-warning'
-              }`}
+            {/* Submit CTA */}
+            <Button
+              type="submit"
+              disabled={submitting || !docNumber.trim()}
+              className="w-full h-12 rounded-xl font-bold gap-2 text-sm shadow-sm"
             >
-              {screenResult.status === 'passed' ? (
-                <FileCheck className="h-4 w-4 shrink-0 mt-0.5" />
+              {submitting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Verifying Credentials with Provider...
+                </>
               ) : (
-                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <>
+                  <UserCheck className="h-4 w-4" />
+                  Submit for Official Verification
+                </>
               )}
-              <span>{screenResult.message}</span>
-            </div>
-          )}
+            </Button>
+          </form>
         </Card>
 
-        {/* Submitted documents */}
+        {/* Submitted Document History */}
         <div className="space-y-3">
-          <h4 className="font-bold">Submitted Documents</h4>
+          <div className="flex items-center justify-between">
+            <h4 className="font-bold text-sm text-foreground">
+              Submitted Verification Records ({records.length})
+            </h4>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={fetchStatus}
+              className="h-7 text-xs text-muted-foreground gap-1"
+            >
+              <RefreshCw className="h-3 w-3" />
+              Refresh
+            </Button>
+          </div>
+
           {loading ? (
-            <div className="flex justify-center py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <div className="py-8 flex justify-center">
+              <Loader2 className="h-6 w-6 animate-spin text-primary" />
             </div>
-          ) : docs.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-8">
-              No documents uploaded yet. Upload your first document above.
-            </p>
+          ) : records.length === 0 ? (
+            <Card className="p-6 text-center text-xs text-muted-foreground border-dashed">
+              No verification records submitted yet. Complete the form above to verify your account.
+            </Card>
           ) : (
-            docs.map((doc) => {
-              const cfg = STATUS_CONFIG[doc.status] || STATUS_CONFIG.pending;
-              const Icon = cfg.icon;
-              const typeLabel = DOC_TYPES.find((d) => d.value === doc.document_type)?.label || doc.document_type;
+            records.map((rec) => {
+              const cfg = STATUS_DETAILS[rec.status] || STATUS_DETAILS.not_verified;
+              const RecIcon = cfg.icon;
+              const docLabel =
+                DOC_TYPES.find((d) => d.value === rec.document_type)?.label || rec.document_type;
 
               return (
-                <Card key={doc.id} className="p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-sm">{typeLabel}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {new Date(doc.created_at).toLocaleDateString('en-IN')}
+                <Card key={rec.id} className="p-4 space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="font-extrabold text-sm text-foreground">{docLabel}</p>
+                      <p className="font-mono text-xs text-muted-foreground mt-0.5">
+                        {rec.document_number_masked}
                       </p>
-                      {doc.admin_notes && (doc.status === 'rejected' || doc.status === 'reupload_requested') && (
-                        <p className="text-xs text-destructive mt-1">Note: {doc.admin_notes}</p>
-                      )}
-                      <div className="flex flex-wrap gap-1.5 mt-2">
-                        <Badge
-                          variant="outline"
-                          className={`gap-1 text-[10px] ${
-                            (AI_CHECK_CONFIG[doc.fraud_status || 'pending'] || AI_CHECK_CONFIG.pending).className
-                          }`}
-                        >
-                          <ScanSearch className="h-3 w-3" />
-                          {(AI_CHECK_CONFIG[doc.fraud_status || 'pending'] || AI_CHECK_CONFIG.pending).label}
-                        </Badge>
-                        {doc.risk_level && (
-                          <Badge
-                            variant="outline"
-                            className={`text-[10px] capitalize ${RISK_CONFIG[doc.risk_level] || ''}`}
-                          >
-                            Risk: {doc.risk_level}
-                          </Badge>
-                        )}
-                      </div>
                     </div>
-                    <Badge variant="outline" className={`gap-1 ${cfg.color} shrink-0`}>
-                      <Icon className="h-3 w-3" /> {cfg.label}
+                    <Badge variant="outline" className={cfg.badgeClass}>
+                      <RecIcon className="h-3 w-3 mr-1" />
+                      {cfg.label}
                     </Badge>
                   </div>
+
+                  {rec.failure_reason && (
+                    <div className="p-2.5 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs">
+                      <strong>Reason: </strong> {rec.failure_reason}
+                    </div>
+                  )}
+
+                  {rec.admin_notes && (
+                    <p className="text-[11px] text-muted-foreground italic">
+                      Compliance Note: {rec.admin_notes}
+                    </p>
+                  )}
+
+                  <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1 border-t border-border/40">
+                    <span>Submitted: {new Date(rec.created_at).toLocaleDateString('en-IN')}</span>
+                    <span className="capitalize">Risk: {rec.risk_level}</span>
+                  </div>
+
+                  {/* Retry / Appeal option for failed verification */}
+                  {rec.status === 'failed' && (
+                    <div className="pt-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full text-xs font-bold gap-1.5 rounded-xl border-destructive/30 text-destructive hover:bg-destructive/10"
+                        onClick={() => {
+                          setDocType(rec.document_type);
+                          setDocNumber('');
+                          window.scrollTo({ top: 300, behavior: 'smooth' });
+                        }}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        Retry Verification / Re-enter Credential
+                      </Button>
+                    </div>
+                  )}
                 </Card>
               );
             })

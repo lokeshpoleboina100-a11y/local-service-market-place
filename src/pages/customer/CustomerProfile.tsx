@@ -50,7 +50,6 @@ export default function CustomerProfile() {
             { label: t('profile.my_jobs'), action: () => navigate('/customer') },
             { label: t('profile.payment_history'), action: () => {} },
             { label: t('profile.settings'), action: () => {} },
-            { label: t('ai_help.title', 'AI Help Desk'), action: () => navigate('/ai-help') },
           ].map((item) => (
             <Card key={item.label} className="p-4 cursor-pointer" onClick={item.action}>
               <div className="flex items-center justify-between">

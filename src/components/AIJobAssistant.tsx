@@ -7,516 +7,335 @@ import {
   Clock,
   ChevronDown,
   Info,
-  ThumbsUp,
-  ThumbsDown,
-  Download,
+  CheckCircle2,
   AlertCircle,
+  FileText,
+  Tag,
+  DollarSign,
+  ArrowRight,
+  ShieldCheck,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import { classifyIssue, estimateJob, type IssueClassification, type JobEstimate } from '@/services/ai';
-import { supabase } from '@/integrations/supabase/client';
-import { useAuth } from '@/contexts/AuthContext';
-import { ACTIVE_CATEGORIES, CATEGORY_ICONS, CATEGORY_LABELS, JobCategory } from '@/lib/types';
-
-/** Serialisable snapshot of the AI reasoning, saved with the job and exportable. */
-export interface AiExplanation {
-  version: 1;
-  generated_at: string;
-  input: { title: string; description: string };
-  category: string;
-  category_label: string;
-  urgency: string;
-  confidence: number;
-  method: string;
-  keywords: string[];
-  summary?: string;
-  estimate?: JobEstimate | null;
-  feedback?: {
-    vote: 'up' | 'down' | 'wrong_category';
-    corrected_category?: string;
-    corrected_urgency?: string;
-  } | null;
-}
+import { analyzeFullJob, type FullJobAnalysis } from '@/services/ai';
+import { CATEGORY_ICONS, CATEGORY_LABELS, JobCategory } from '@/lib/types';
 
 interface Props {
   title: string;
   description: string;
+  image?: string | null;
   /** Called when the customer accepts the AI-detected category. */
-  onApplyCategory: (category: string) => void;
+  onApplyCategory: (category: string, service?: string) => void;
+  /** Called when customer accepts the suggested title. */
+  onApplyTitle?: (title: string) => void;
+  /** Called when customer accepts the suggested description. */
+  onApplyDescription?: (desc: string) => void;
   /** Called when the customer accepts the suggested typical price. */
   onApplyBudget?: (amount: number) => void;
-  /** Fires whenever the explanation changes so the parent can persist it with the job. */
-  onExplanationChange?: (explanation: AiExplanation | null) => void;
+  /** Called when customer clicks "Use All Suggestions". */
+  onApplyAll?: (data: {
+    category: string;
+    service: string;
+    title: string;
+    description: string;
+    budget: number;
+  }) => void;
+  /** Fires whenever the explanation changes. */
+  onExplanationChange?: (explanation: any) => void;
 }
-
-const URGENCY_STYLES: Record<string, string> = {
-  high: 'bg-destructive/15 text-destructive border-destructive/30',
-  normal: 'bg-primary/10 text-primary border-primary/25',
-  low: 'bg-muted text-muted-foreground border-border',
-};
-
-const URGENCIES = ['low', 'normal', 'high'] as const;
 
 const money = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
 
 export default function AIJobAssistant({
   title,
   description,
+  image,
   onApplyCategory,
+  onApplyTitle,
+  onApplyDescription,
   onApplyBudget,
+  onApplyAll,
   onExplanationChange,
 }: Props) {
   const { toast } = useToast();
-  const { user } = useAuth();
   const [loading, setLoading] = useState(false);
-  const [classification, setClassification] = useState<IssueClassification | null>(null);
-  const [estimate, setEstimate] = useState<JobEstimate | null>(null);
-  const [vote, setVote] = useState<'up' | 'down' | 'wrong_category' | null>(null);
-  const [showCorrection, setShowCorrection] = useState(false);
-  const [fixCategory, setFixCategory] = useState<string>('');
-  const [fixUrgency, setFixUrgency] = useState<string>('');
-  const [savingFeedback, setSavingFeedback] = useState(false);
+  const [analysis, setAnalysis] = useState<FullJobAnalysis | null>(null);
+  const [appliedAll, setAppliedAll] = useState(false);
 
   const text = `${title} ${description}`.trim();
 
-  const buildExplanation = (
-    cls: IssueClassification | null,
-    est: JobEstimate | null,
-    fb: AiExplanation['feedback'] = null,
-  ): AiExplanation | null => {
-    if (!cls) return null;
-    return {
-      version: 1,
-      generated_at: new Date().toISOString(),
-      input: { title, description },
-      category: cls.category,
-      category_label: CATEGORY_LABELS[cls.category as JobCategory] ?? cls.category,
-      urgency: cls.urgency,
-      confidence: cls.confidence,
-      method: cls.method,
-      keywords: cls.keywords ?? [],
-      summary: cls.summary,
-      estimate: est,
-      feedback: fb,
-    };
-  };
-
-  // Keep the parent in sync so the explanation is stored on the job record.
-  useEffect(() => {
-    onExplanationChange?.(
-      buildExplanation(
-        classification,
-        estimate,
-        vote
-          ? { vote, corrected_category: fixCategory || undefined, corrected_urgency: fixUrgency || undefined }
-          : null,
-      ),
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classification, estimate, vote, fixCategory, fixUrgency]);
-
+  // Re-run analysis when image changes or explicitly requested
   const analyse = async () => {
-    if (text.length < 5) {
-      toast({ title: 'Add a few more details', description: 'Describe the problem so the AI can analyse it.' });
+    if (!image && text.length < 3) {
+      toast({
+        title: 'Provide a photo or description',
+        description: 'Upload a problem photo or type a few words so AI can analyze the job.',
+      });
       return;
     }
+
     setLoading(true);
-    setVote(null);
-    setShowCorrection(false);
-    setFixCategory('');
-    setFixUrgency('');
+    setAppliedAll(false);
     try {
-      const cls = await classifyIssue({ title, description });
-      setClassification(cls);
-      const est = await estimateJob({ category: cls.category, urgency: cls.urgency });
-      setEstimate(est);
+      const result = await analyzeFullJob({
+        image: image || null,
+        title: title || undefined,
+        description: description || undefined,
+      });
+
+      setAnalysis(result);
+      onExplanationChange?.({
+        version: 2,
+        generated_at: new Date().toISOString(),
+        analysis: result,
+      });
+
+      if (result.is_ambiguous) {
+        toast({
+          title: 'Clarification Needed',
+          description: result.clarification_prompt || 'Please provide more details about the problem.',
+        });
+      } else {
+        toast({
+          title: '✅ AI Analysis Ready',
+          description: `Detected: ${result.service_name} (${result.group_name}) — Est: ${money(result.estimated_price.min)} to ${money(result.estimated_price.max)}`,
+        });
+      }
     } catch (e: any) {
-      toast({ title: 'AI analysis failed', description: e.message, variant: 'destructive' });
+      toast({
+        title: 'AI Analysis Failed',
+        description: e.message || 'Could not analyze job.',
+        variant: 'destructive',
+      });
     } finally {
       setLoading(false);
     }
   };
 
-  const sendFeedback = async (
-    kind: 'up' | 'down' | 'wrong_category',
-    corrections?: { category?: string; urgency?: string },
-  ) => {
-    if (!classification) return;
-    setVote(kind);
-    setSavingFeedback(true);
-    try {
-      if (user) {
-        const { error } = await supabase.from('ai_feedback').insert({
-          user_id: user.id,
-          feature: 'job_classification',
-          vote: kind,
-          ai_category: classification.category,
-          ai_urgency: classification.urgency,
-          corrected_category: corrections?.category ?? null,
-          corrected_urgency: corrections?.urgency ?? null,
-          explanation: buildExplanation(classification, estimate) as any,
-        });
-        if (error) throw error;
-      }
-      if (corrections?.category) {
-        onApplyCategory(corrections.category);
-        setClassification({ ...classification, category: corrections.category });
-      }
-      if (corrections?.urgency) {
-        setClassification((prev) => (prev ? { ...prev, urgency: corrections.urgency as any } : prev));
-      }
-      toast({
-        title: 'Thanks for the feedback',
-        description:
-          kind === 'up'
-            ? 'Noted — this helps improve future matches.'
-            : 'We saved your correction and will use it to improve the model.',
+  const handleApplyAll = () => {
+    if (!analysis) return;
+    onApplyCategory(analysis.group_id, analysis.service_name);
+    if (onApplyTitle) onApplyTitle(analysis.suggested_title);
+    if (onApplyDescription) onApplyDescription(analysis.suggested_description);
+    if (onApplyBudget) onApplyBudget(analysis.estimated_price.typical);
+
+    if (onApplyAll) {
+      onApplyAll({
+        category: analysis.group_id,
+        service: analysis.service_name,
+        title: analysis.suggested_title,
+        description: analysis.suggested_description,
+        budget: analysis.estimated_price.typical,
       });
-      setShowCorrection(false);
-    } catch (e: any) {
-      toast({ title: 'Could not save feedback', description: e.message, variant: 'destructive' });
-    } finally {
-      setSavingFeedback(false);
     }
-  };
 
-  const exportExplanation = () => {
-    const payload = buildExplanation(
-      classification,
-      estimate,
-      vote ? { vote, corrected_category: fixCategory || undefined, corrected_urgency: fixUrgency || undefined } : null,
-    );
-    if (!payload) return;
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `nearwork-ai-explanation-${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast({ title: 'Explanation exported', description: 'A JSON audit summary was downloaded.' });
+    setAppliedAll(true);
+    toast({
+      title: '✨ Suggestions Applied',
+      description: 'Category, title, description, and estimated budget filled into your job form.',
+    });
   };
-
-  const inputs = estimate?.inputs;
 
   return (
-    <Card className="p-4 space-y-3 border-primary/25 bg-primary/5 rounded-2xl">
+    <Card className="p-4 space-y-4 border-indigo-500/25 bg-gradient-to-br from-indigo-500/[0.04] via-card to-card rounded-2xl shadow-sm">
+      {/* Header */}
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h4 className="font-bold text-sm flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-primary" /> AI job analysis
+          <h4 className="font-bold text-sm flex items-center gap-2 text-foreground">
+            <Sparkles className="h-4 w-4 text-indigo-600" />
+            AI Job Analysis & Price Estimator
           </h4>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Detects the service type and predicts a fair price and time from marketplace data.
+            Auto-detects service category, generates title/description & estimates price & time.
           </p>
         </div>
-        <Button type="button" size="sm" onClick={analyse} disabled={loading} className="rounded-xl gap-1.5 shrink-0">
+        <Button
+          type="button"
+          size="sm"
+          onClick={analyse}
+          disabled={loading}
+          className="rounded-xl gap-1.5 shrink-0 bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-9"
+        >
           {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
-          {classification ? 'Re-analyse' : 'Analyse'}
+          {analysis ? 'Re-analyse' : 'Analyse Job'}
         </Button>
       </div>
 
-      {classification && (
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline" className="gap-1 font-bold">
-              {CATEGORY_ICONS[classification.category as JobCategory]}{' '}
-              {CATEGORY_LABELS[classification.category as JobCategory] ?? classification.category}
-            </Badge>
-            <Badge variant="outline" className={URGENCY_STYLES[classification.urgency]}>
-              {classification.urgency} urgency
-            </Badge>
-            <span className="text-xs text-muted-foreground">
-              {Math.round(classification.confidence * 100)}% confident
-            </span>
+      {/* Ambiguity Alert */}
+      {analysis && analysis.is_ambiguous && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400 flex items-start gap-2">
+          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-bold">Unable to identify the service clearly</p>
+            <p className="mt-0.5 text-muted-foreground">
+              {analysis.clarification_prompt || 'Please add more details or upload a clearer photograph.'}
+            </p>
           </div>
-          {classification.summary && (
-            <p className="text-xs text-muted-foreground italic">“{classification.summary}”</p>
-          )}
-          {classification.keywords?.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {classification.keywords.map((k) => (
-                <span key={k} className="text-[10px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
-                  {k}
-                </span>
-              ))}
-            </div>
-          )}
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            className="rounded-xl w-full font-bold"
-            onClick={() => onApplyCategory(classification.category)}
-          >
-            Use this category
-          </Button>
-
-          <Collapsible>
-            <CollapsibleTrigger className="group flex w-full items-center justify-between gap-2 rounded-xl border bg-background/60 px-3 py-2 text-xs font-semibold hover:bg-background">
-              <span className="flex items-center gap-1.5">
-                <Info className="h-3.5 w-3.5 text-primary" /> Why this category & urgency?
-              </span>
-              <ChevronDown className="h-3.5 w-3.5 transition-transform group-data-[state=open]:rotate-180" />
-            </CollapsibleTrigger>
-            <CollapsibleContent className="mt-2 space-y-3 rounded-xl border bg-background/60 p-3">
-              <div>
-                <div className="flex items-center justify-between text-[11px] font-semibold">
-                  <span>Classification confidence</span>
-                  <span>{Math.round(classification.confidence * 100)}%</span>
-                </div>
-                <Progress value={Math.round(classification.confidence * 100)} className="h-1.5 mt-1" />
-                <p className="text-[11px] text-muted-foreground mt-1">
-                  {classification.method === 'llm'
-                    ? 'Detected by the AI language model reading your title and description.'
-                    : 'Detected by keyword matching (AI model unavailable), so double-check the category.'}
-                </p>
-              </div>
-
-              <div className="space-y-1">
-                <p className="text-[11px] font-semibold">Signals used from your text</p>
-                {classification.keywords?.length ? (
-                  <div className="flex flex-wrap gap-1">
-                    {classification.keywords.map((k) => (
-                      <span
-                        key={`why-${k}`}
-                        className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20"
-                      >
-                        {k}
-                      </span>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-[11px] text-muted-foreground">
-                    No strong keywords found — add more detail for a sharper match.
-                  </p>
-                )}
-              </div>
-
-              <div className="space-y-1">
-                <p className="text-[11px] font-semibold">
-                  Urgency: <span className="capitalize">{classification.urgency}</span>
-                </p>
-                <p className="text-[11px] text-muted-foreground">
-                  {classification.urgency === 'high'
-                    ? 'Your wording suggests an emergency or same-day need, so pricing leans toward the higher band.'
-                    : classification.urgency === 'low'
-                      ? 'Your wording suggests this can be scheduled later, which keeps the price band lower.'
-                      : 'No emergency wording found, so this is treated as a standard scheduled job.'}
-                </p>
-              </div>
-
-              {estimate && (
-                <div className="space-y-1 border-t pt-2">
-                  <p className="text-[11px] font-semibold">How the estimate was built</p>
-                  <ul className="text-[11px] text-muted-foreground space-y-0.5 list-disc pl-4">
-                    <li>
-                      Price:{' '}
-                      {estimate.basis.cost_source === 'marketplace_history'
-                        ? `${estimate.basis.cost_samples} similar accepted/paid jobs in ${
-                            CATEGORY_LABELS[estimate.category as JobCategory] ?? estimate.category
-                          }`
-                        : 'category baseline (not enough completed jobs yet)'}
-                    </li>
-                    <li>
-                      Duration:{' '}
-                      {estimate.basis.duration_source === 'marketplace_history'
-                        ? `${estimate.basis.duration_samples} past jobs`
-                        : 'category baseline'}
-                    </li>
-                    <li>Urgency multiplier applied: {estimate.basis.urgency}</li>
-                    <li>Estimate confidence: {Math.round(estimate.confidence * 100)}%</li>
-                  </ul>
-                </div>
-              )}
-
-              {inputs && (
-                <div className="space-y-2 border-t pt-2">
-                  <p className="text-[11px] font-semibold">Estimate inputs (audit view)</p>
-
-                  <div className="rounded-lg border bg-muted/40 p-2 space-y-1">
-                    <p className="text-[11px] font-semibold">Price band</p>
-                    {inputs.cost.p50 !== null ? (
-                      <p className="text-[11px] text-muted-foreground">
-                        Percentiles from history — p25 {money(inputs.cost.p25!)}, p50 {money(inputs.cost.p50)}, p75{' '}
-                        {money(inputs.cost.p75!)}
-                      </p>
-                    ) : (
-                      <p className="text-[11px] text-muted-foreground">
-                        Default baseline used: {money(inputs.cost.baseline[0])} – {money(inputs.cost.baseline[1])}
-                      </p>
-                    )}
-                    <p className="text-[11px] text-muted-foreground">
-                      Records used: {inputs.cost.records_used.completed_payments} completed payments,{' '}
-                      {inputs.cost.records_used.accepted_bids} accepted bids (minimum{' '}
-                      {inputs.cost.records_used.minimum_required} needed for history-based pricing)
-                    </p>
-                    <p className="text-[11px] text-muted-foreground">
-                      Urgency multiplier on the upper band: ×{inputs.urgency_multiplier}
-                    </p>
-                  </div>
-
-                  <div className="rounded-lg border bg-muted/40 p-2 space-y-1">
-                    <p className="text-[11px] font-semibold">Duration band</p>
-                    {inputs.duration_hours.p50 !== null ? (
-                      <p className="text-[11px] text-muted-foreground">
-                        Percentiles from history — p25 {inputs.duration_hours.p25}h, p50 {inputs.duration_hours.p50}h,
-                        p75 {inputs.duration_hours.p75}h
-                      </p>
-                    ) : (
-                      <p className="text-[11px] text-muted-foreground">
-                        Default baseline used: {inputs.duration_hours.baseline[0]}–{inputs.duration_hours.baseline[1]}{' '}
-                        hrs
-                      </p>
-                    )}
-                    <p className="text-[11px] text-muted-foreground">
-                      Records used: {inputs.duration_hours.records_used.completed_jobs} completed jobs of{' '}
-                      {inputs.history_jobs_scanned} scanned (minimum{' '}
-                      {inputs.duration_hours.records_used.minimum_required} needed)
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* Feedback controls */}
-              <div className="space-y-2 border-t pt-2">
-                <p className="text-[11px] font-semibold">Was this analysis correct?</p>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={vote === 'up' ? 'default' : 'outline'}
-                    className="rounded-xl gap-1 h-8 text-[11px]"
-                    disabled={savingFeedback}
-                    onClick={() => sendFeedback('up')}
-                  >
-                    <ThumbsUp className="h-3 w-3" /> Looks right
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={vote === 'down' ? 'default' : 'outline'}
-                    className="rounded-xl gap-1 h-8 text-[11px]"
-                    disabled={savingFeedback}
-                    onClick={() => sendFeedback('down')}
-                  >
-                    <ThumbsDown className="h-3 w-3" /> Not helpful
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={showCorrection || vote === 'wrong_category' ? 'secondary' : 'outline'}
-                    className="rounded-xl gap-1 h-8 text-[11px]"
-                    onClick={() => setShowCorrection((s) => !s)}
-                  >
-                    <AlertCircle className="h-3 w-3" /> Wrong category
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="rounded-xl gap-1 h-8 text-[11px]"
-                    onClick={exportExplanation}
-                  >
-                    <Download className="h-3 w-3" /> Export explanation
-                  </Button>
-                </div>
-
-                {showCorrection && (
-                  <div className="space-y-2 rounded-lg border bg-muted/40 p-2">
-                    <p className="text-[11px] font-semibold">Pick the correct values</p>
-                    <Select value={fixCategory} onValueChange={setFixCategory}>
-                      <SelectTrigger className="h-9 text-xs rounded-lg">
-                        <SelectValue placeholder="Correct category" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {ACTIVE_CATEGORIES.map((c) => (
-                          <SelectItem key={c} value={c} className="text-xs">
-                            {CATEGORY_ICONS[c]} {CATEGORY_LABELS[c]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select value={fixUrgency} onValueChange={setFixUrgency}>
-                      <SelectTrigger className="h-9 text-xs rounded-lg">
-                        <SelectValue placeholder="Correct urgency (optional)" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {URGENCIES.map((u) => (
-                          <SelectItem key={u} value={u} className="text-xs capitalize">
-                            {u}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="w-full rounded-xl h-9 text-xs font-bold"
-                      disabled={savingFeedback || !fixCategory}
-                      onClick={() =>
-                        sendFeedback('wrong_category', {
-                          category: fixCategory,
-                          urgency: fixUrgency || undefined,
-                        })
-                      }
-                    >
-                      {savingFeedback ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-                      Submit correction & apply
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
         </div>
       )}
 
-      {estimate && (
-        <div className="grid grid-cols-2 gap-2 pt-1">
-          <div className="p-3 rounded-xl bg-background/70 border">
-            <p className="text-[11px] text-muted-foreground flex items-center gap-1 font-semibold">
-              <IndianRupee className="h-3 w-3" /> Expected price
-            </p>
-            <p className="font-bold text-sm mt-1">
-              ₹{estimate.cost.low.toLocaleString('en-IN')} – ₹{estimate.cost.high.toLocaleString('en-IN')}
-            </p>
-            <p className="text-[11px] text-muted-foreground">
-              Typical ₹{estimate.cost.typical.toLocaleString('en-IN')}
-            </p>
-          </div>
-          <div className="p-3 rounded-xl bg-background/70 border">
-            <p className="text-[11px] text-muted-foreground flex items-center gap-1 font-semibold">
-              <Clock className="h-3 w-3" /> Expected time
-            </p>
-            <p className="font-bold text-sm mt-1">
-              {estimate.duration_hours.low}–{estimate.duration_hours.high} hrs
-            </p>
-            <p className="text-[11px] text-muted-foreground">Typical {estimate.duration_hours.typical} hrs</p>
-          </div>
-          <div className="col-span-2 flex items-center justify-between gap-2">
-            <p className="text-[11px] text-muted-foreground">
-              {estimate.basis.cost_source === 'marketplace_history'
-                ? `Based on ${estimate.basis.cost_samples} similar jobs on NearWork`
-                : 'Based on category baselines until more jobs complete'}
-            </p>
-            {onApplyBudget && (
+      {/* Analysis Results */}
+      {analysis && !analysis.is_ambiguous && (
+        <div className="space-y-3.5 pt-1">
+          {/* Category & Service Detection */}
+          <div className="bg-background/80 rounded-xl p-3 border border-border/70 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                <Tag className="h-3 w-3 text-indigo-600" /> Detected Service Category
+              </span>
+              <Badge className="bg-indigo-500/10 text-indigo-600 hover:bg-indigo-500/20 border-indigo-500/20 text-xs font-bold">
+                {Math.round(analysis.confidence)}% Confidence
+              </Badge>
+            </div>
+
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="font-extrabold text-sm text-foreground flex items-center gap-1.5">
+                  <span>{CATEGORY_ICONS[analysis.group_id as JobCategory] || '🛠️'}</span>
+                  <span>{analysis.service_name}</span>
+                  <span className="text-xs text-muted-foreground font-normal">({analysis.group_name})</span>
+                </p>
+                {analysis.is_new_category && (
+                  <span className="text-[10px] text-amber-600 font-semibold">Flexible custom category</span>
+                )}
+              </div>
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
-                className="rounded-xl shrink-0"
-                onClick={() => onApplyBudget(estimate.cost.typical)}
+                className="h-7 text-xs rounded-lg font-semibold border-indigo-200 text-indigo-600 hover:bg-indigo-50"
+                onClick={() => onApplyCategory(analysis.group_id, analysis.service_name)}
               >
-                Use ₹{estimate.cost.typical.toLocaleString('en-IN')}
+                Use Category
               </Button>
+            </div>
+          </div>
+
+          {/* Pricing & Time Estimation Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {/* Price Box */}
+            <div className="bg-background/80 rounded-xl p-3 border border-border/70 space-y-1.5">
+              <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                <IndianRupee className="h-3 w-3 text-emerald-600" /> Estimated Price Range
+              </span>
+              <div className="flex items-baseline justify-between">
+                <p className="text-lg font-extrabold text-emerald-600">
+                  {money(analysis.estimated_price.min)} – {money(analysis.estimated_price.max)}
+                </p>
+                {onApplyBudget && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-1.5 text-[11px] font-bold text-emerald-600 hover:bg-emerald-50"
+                    onClick={() => onApplyBudget(analysis.estimated_price.typical)}
+                  >
+                    Set {money(analysis.estimated_price.typical)}
+                  </Button>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Labour: <span className="font-semibold text-foreground">{analysis.estimated_price.labour_estimate}</span> | Parts: <span className="font-semibold text-foreground">{analysis.estimated_price.materials_estimate}</span>
+              </p>
+            </div>
+
+            {/* Duration Box */}
+            <div className="bg-background/80 rounded-xl p-3 border border-border/70 space-y-1.5">
+              <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                <Clock className="h-3 w-3 text-indigo-600" /> Estimated Duration
+              </span>
+              <p className="text-lg font-extrabold text-foreground">
+                {analysis.estimated_duration.display}
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                Type: <span className="font-semibold text-foreground">{analysis.estimated_duration.type === 'working_hours' ? 'On-site working hours' : 'Calendar working days'}</span>
+              </p>
+            </div>
+          </div>
+
+          {/* Price Factors */}
+          {analysis.estimated_price.factors?.length > 0 && (
+            <div className="text-[11px] text-muted-foreground bg-muted/40 rounded-lg p-2.5 space-y-1">
+              <span className="font-bold text-foreground">Factors affecting price:</span>
+              <ul className="list-disc list-inside space-y-0.5">
+                {analysis.estimated_price.factors.map((f, i) => (
+                  <li key={i}>{f}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Generated Title Preview */}
+          <div className="bg-background/80 rounded-xl p-3 border border-border/70 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                <FileText className="h-3 w-3 text-indigo-600" /> Suggested Job Title
+              </span>
+              {onApplyTitle && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-1.5 text-[11px] font-bold text-indigo-600 hover:bg-indigo-50"
+                  onClick={() => onApplyTitle(analysis.suggested_title)}
+                >
+                  Use Title
+                </Button>
+              )}
+            </div>
+            <p className="text-xs font-bold text-foreground">
+              {analysis.suggested_title}
+            </p>
+          </div>
+
+          {/* Generated Description Preview */}
+          <div className="bg-background/80 rounded-xl p-3 border border-border/70 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                <FileText className="h-3 w-3 text-indigo-600" /> Suggested Description
+              </span>
+              {onApplyDescription && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-1.5 text-[11px] font-bold text-indigo-600 hover:bg-indigo-50"
+                  onClick={() => onApplyDescription(analysis.suggested_description)}
+                >
+                  Use Description
+                </Button>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground whitespace-pre-line line-clamp-3">
+              {analysis.suggested_description}
+            </p>
+          </div>
+
+          {/* Master "Apply All" Action */}
+          <Button
+            type="button"
+            className="w-full h-11 rounded-xl font-bold bg-indigo-600 hover:bg-indigo-700 text-white gap-2 shadow-md shadow-indigo-600/20"
+            onClick={handleApplyAll}
+          >
+            {appliedAll ? (
+              <>
+                <CheckCircle2 className="h-4 w-4" /> Suggestions Applied to Form
+              </>
+            ) : (
+              <>
+                <Sparkles className="h-4 w-4" /> Use All AI Suggestions in Post
+              </>
             )}
+          </Button>
+
+          {/* Data Source Disclosure */}
+          <div className="flex items-center gap-1 text-[11px] text-muted-foreground pt-1">
+            <ShieldCheck className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+            <span>{analysis.data_source}</span>
           </div>
         </div>
       )}

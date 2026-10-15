@@ -128,6 +128,17 @@ export default function AdminVerification() {
     setUpdating(docId);
     const adminNotes = notes[docId] || '';
 
+    // Call backend review endpoint for audit trail and compliance
+    await fetch(`/api/verification/admin/review/${docId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actor_id: 'admin',
+        action: status === 'approved' ? 'approve' : 'reject',
+        notes: adminNotes,
+      }),
+    }).catch(() => {});
+
     const { error } = await supabase.from('verification_documents').update({
       status,
       admin_notes: adminNotes,

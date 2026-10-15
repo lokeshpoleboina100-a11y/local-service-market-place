@@ -77,7 +77,6 @@ export default function WorkerProfile() {
             { label: t('profile.edit_profile'), action: () => navigate('/edit-profile') },
             { label: t('profile.verification'), action: () => navigate('/worker/verification') },
             { label: t('profile.settings'), action: () => navigate('/worker/settings') },
-            { label: t('ai_help.title', 'AI Help Desk'), action: () => navigate('/ai-help') },
           ].map((item) => (
             <Card key={item.label} className="p-4 cursor-pointer" onClick={item.action}>
               <div className="flex items-center justify-between">

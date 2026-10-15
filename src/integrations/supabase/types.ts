@@ -840,6 +840,12 @@ export type Database = {
         | "pet_services"
         | "events_creative"
         | "professional_services"
+        | "construction_building"
+        | "daily_wage_labour"
+        | "agriculture_farming"
+        | "rural_village_services"
+        | "welding_fabrication"
+        | "transport_delivery"
       job_status:
         | "open"
         | "in_progress"

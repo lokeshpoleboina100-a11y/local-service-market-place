@@ -91,6 +91,48 @@ export const CATEGORY_GROUPS: CategoryGroup[] = [
     description: 'Business, design and expert help',
     services: ['Accountant', 'Graphic Designer', 'Video Editor', 'Digital Marketing', 'Web Developer', 'Legal/Documentation Assistance'].map(s),
   },
+  {
+    id: 'construction_building',
+    name: 'Construction & Building',
+    icon: '🏗️',
+    description: 'Masonry, tiles, concrete, plastering and building renovation',
+    services: ['Masonry & Brickwork', 'Tile & Marble Laying', 'Plastering & POP Work', 'Concrete & Foundation', 'Building Renovation', 'Roofing & Waterproofing', 'Demolition & Site Clearance'].map(s),
+  },
+  {
+    id: 'daily_wage_labour',
+    name: 'Daily Wage Labour',
+    icon: '👷',
+    description: 'General construction helpers, material loaders, digging and shifting workers',
+    services: ['General Construction Labour', 'Loading & Unloading Helpers', 'Shifting & Moving Labour', 'Digging & Trenching', 'Debris & Waste Clearance', 'Event Setup Helpers', 'Factory & Warehouse Helpers'].map(s),
+  },
+  {
+    id: 'agriculture_farming',
+    name: 'Agriculture & Farming',
+    icon: '🌾',
+    description: 'Tractor driving, harvesting, irrigation, spraying and crop care',
+    services: ['Tractor Driving & Ploughing', 'Crop Harvesting & Reaping', 'Irrigation & Borewell Setup', 'Pesticide & Fertilizer Spraying', 'Dairy & Cattle Care', 'Soil Preparation & Seeding', 'Fencing & Farm Protection'].map(s),
+  },
+  {
+    id: 'rural_village_services',
+    name: 'Rural & Village Services',
+    icon: '🏡',
+    description: 'Borewell motors, flour mills, solar setups, biogas, and village repairs',
+    services: ['Borewell Motor & Pump Repair', 'Flour Mill / Atta Chakki Fix', 'Solar Panel & Battery Setup', 'Biogas Plant Maintenance', 'Thresher & Harvester Repair', 'Cycle & Rickshaw Repair', 'Thatched & Tin Shed Roofing'].map(s),
+  },
+  {
+    id: 'welding_fabrication',
+    name: 'Welding & Fabrication',
+    icon: '⚡',
+    description: 'Arc & TIG welding, security grills, gates, shutters, and steel sheds',
+    services: ['Arc & TIG Welding', 'Metal Gate & Grill Fabrication', 'Railing & Staircase Welding', 'Shutter & Door Repair', 'Shed & Truss Fabrication', 'Custom Metal Work', 'Rust Cutting & Patch Welding'].map(s),
+  },
+  {
+    id: 'transport_delivery',
+    name: 'Transport & Delivery',
+    icon: '🚚',
+    description: 'Mini-trucks, tata ace, tempo shifting, urgent parcel and heavy cargo delivery',
+    services: ['Mini-Truck / Tata Ace Goods Transport', 'Auto / Tempo Load Shifting', 'Two-Wheeler Urgent Parcel Delivery', 'Furniture & Appliance Transport', 'Building Material Transport', 'Intercity Goods Logistics', 'Cold Storage Goods Transit'].map(s),
+  },
 ];
 
 /** Older jobs used one enum value per service — map them into the new grouping. */
@@ -105,8 +147,8 @@ export const LEGACY_CATEGORY_MAP: Partial<Record<DbJobCategory, { group: DbJobCa
   painting: { group: 'home_services', service: 'Painter' },
   cleaning: { group: 'home_services', service: 'Cleaning' },
   repair: { group: 'home_services', service: 'Appliance Repair' },
-  construction: { group: 'home_services', service: 'Carpenter' },
-  delivery: { group: 'moving_delivery', service: 'Local Delivery' },
+  construction: { group: 'construction_building', service: 'Masonry & Brickwork' },
+  delivery: { group: 'transport_delivery', service: 'Mini-Truck / Tata Ace Goods Transport' },
   freelance: { group: 'professional_services', service: 'Graphic Designer' },
 };
 

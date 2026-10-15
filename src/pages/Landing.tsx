@@ -216,7 +216,7 @@ export default function Landing() {
             <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-[#6C63FF] via-[#8B5CF6] to-[#FF4D9D] flex items-center justify-center shadow-lg shadow-[#6C63FF]/40">
               <Sparkles className="h-5 w-5 text-white" />
             </div>
-            <span className="text-lg font-extrabold tracking-tight">FixIt</span>
+            <span className="text-lg font-extrabold tracking-tight">NearWork</span>
           </div>
           <div className="hidden md:flex items-center gap-1 text-sm text-white/70">
             {['Categories', 'How it works', 'Talent', 'Pricing'].map(l => (
@@ -227,6 +227,14 @@ export default function Landing() {
             ))}
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              className="hidden sm:inline-flex text-indigo-300 border-indigo-500/40 hover:bg-indigo-500/20 rounded-xl text-xs font-semibold"
+              onClick={() => navigate('/damage-inspection')}
+            >
+              <Sparkles className="w-3.5 h-3.5 mr-1 text-indigo-400" />
+              Damage Inspector
+            </Button>
             <Button
               variant="ghost"
               className="hidden sm:inline-flex text-white/80 hover:text-white hover:bg-white/10 rounded-xl"
